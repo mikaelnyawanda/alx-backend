@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-from flask import Flask, render_template, request, g
-from flask_babel import Babel, _, format_datetime
-from typing import Optional
+"""A Basic Flask app with internationalization support.
+"""
 import pytz
-from pytz.exceptions import UnknownTimeZoneError
-from datetime import datetime
+from typing import Union, Dict
+from flask_babel import Babel, format_datetime
+from flask import Flask, render_template, request, g
+
+
+class Config:
+    """Represents a Flask Babel configuration.
+    """
+    LANGUAGES = ["en", "fr"]
+    BABEL_DEFAULT_LOCALE = "en"
+    BABEL_DEFAULT_TIMEZONE = "UTC"
+
 
 app = Flask(__name__)
-
-# Configuration class
-class Config:
-    LANGUAGES = ['en', 'fr']
-    BABEL_DEFAULT_LOCALE = 'en'
-    BABEL_DEFAULT_TIMEZONE = 'UTC'
-
 app.config.from_object(Config)
+app.url_map.strict_slashes = False
 babel = Babel(app)
-
-# Mock user database
 users = {
     1: {"name": "Balou", "locale": "fr", "timezone": "Europe/Paris"},
     2: {"name": "Beyonce", "locale": "en", "timezone": "US/Central"},
@@ -25,56 +26,65 @@ users = {
     4: {"name": "Teletubby", "locale": None, "timezone": "Europe/London"},
 }
 
-def get_user() -> Optional[dict]:
-    """Return user dict or None based on login_as URL param."""
-    try:
-        user_id = int(request.args.get("login_as"))
-        return users.get(user_id)
-    except (TypeError, ValueError):
-        return None
+
+def get_user() -> Union[Dict, None]:
+    """Retrieves a user based on a user id.
+    """
+    login_id = request.args.get('login_as', '')
+    if login_id:
+        return users.get(int(login_id), None)
+    return None
+
 
 @app.before_request
-def before_request():
-    """Executed before each request."""
-    g.user = get_user()
+def before_request() -> None:
+    """Performs some routines before each request's resolution.
+    """
+    user = get_user()
+    g.user = user
+
 
 @babel.localeselector
-def get_locale():
-    """Get best match locale: URL > user > header > default"""
-    url_locale = request.args.get('locale')
-    if url_locale in app.config['LANGUAGES']:
-        return url_locale
+def get_locale() -> str:
+    """Retrieves the locale for a web page.
+    """
+    queries = request.query_string.decode('utf-8').split('&')
+    query_table = dict(map(
+        lambda x: (x if '=' in x else '{}='.format(x)).split('='),
+        queries,
+    ))
+    locale = query_table.get('locale', '')
+    if locale in app.config["LANGUAGES"]:
+        return locale
+    user_details = getattr(g, 'user', None)
+    if user_details and user_details['locale'] in app.config["LANGUAGES"]:
+        return user_details['locale']
+    header_locale = request.headers.get('locale', '')
+    if header_locale in app.config["LANGUAGES"]:
+        return header_locale
+    return app.config['BABEL_DEFAULT_LOCALE']
 
-    if g.get('user'):
-        user_locale = g.user.get('locale')
-        if user_locale in app.config['LANGUAGES']:
-            return user_locale
-
-    return request.accept_languages.best_match(app.config['LANGUAGES'])
 
 @babel.timezoneselector
-def get_timezone():
-    """Get best timezone: URL > user > default"""
+def get_timezone() -> str:
+    """Retrieves the timezone for a web page.
+    """
+    timezone = request.args.get('timezone', '').strip()
+    if not timezone and g.user:
+        timezone = g.user['timezone']
     try:
-        tz = request.args.get('timezone')
-        if tz:
-            return pytz.timezone(tz).zone
-        if g.get('user'):
-            user_tz = g.user.get('timezone')
-            if user_tz:
-                return pytz.timezone(user_tz).zone
-    except UnknownTimeZoneError:
-        pass
-    return 'UTC'
+        return pytz.timezone(timezone).zone
+    except pytz.exceptions.UnknownTimeZoneError:
+        return app.config['BABEL_DEFAULT_TIMEZONE']
+
 
 @app.route('/')
-def index():
-    """Render the home page with current time"""
-    user_tz = get_timezone()
-    current_time = datetime.now(pytz.timezone(user_tz))
-    formatted_time = format_datetime(current_time)
-    return render_template('index.html', current_time=formatted_time)
+def get_index() -> str:
+    """The home/index page.
+    """
+    g.time = format_datetime()
+    return render_template('index.html')
+
 
 if __name__ == '__main__':
     app.run()
-
